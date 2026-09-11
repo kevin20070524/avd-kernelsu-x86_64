@@ -341,16 +341,32 @@ jobs:
           echo "===== grep define_common_kernels ====="
           grep -n 'define_common_kernels\|kernel_build(' BUILD.bazel | head -40
 
-      - name: Add virtio defconfig fragment (Kleaf-safe)
+      - name: Show _define_common_kernel signature
+        run: |
+          cd kernel
+          sed -n '530,620p' build/kernel/kleaf/common_kernels.bzl
+
+      - name: Enable built-in virtio drivers (savedefconfig-safe)
         run: |
           set -euo pipefail
           cd kernel/common
 
-          # 1) 写 fragment 文件
-          FRAG_DIR="arch/x86/configs"
-          FRAG_FILE="${FRAG_DIR}/emulator_virtio.fragment"
-          mkdir -p "$FRAG_DIR"
-          cat > "$FRAG_FILE" <<'EOF'
+          DEFCONFIG="arch/x86/configs/gki_defconfig"
+          [ -f "$DEFCONFIG" ] || { echo "ERROR: $DEFCONFIG not found"; exit 1; }
+
+          echo "===== before ====="
+          grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG" || true
+
+          # 删掉旧的 virtio 相关行，避免重复
+          for key in CONFIG_VIRTIO CONFIG_VIRTIO_PCI CONFIG_VIRTIO_MMIO \
+                     CONFIG_VIRTIO_BLK CONFIG_SCSI_VIRTIO CONFIG_VIRTIO_NET \
+                     CONFIG_VIRTIO_CONSOLE CONFIG_HW_RANDOM_VIRTIO; do
+            sed -i "/^${key}=/d" "$DEFCONFIG"
+            sed -i "/^# ${key} is not set/d" "$DEFCONFIG"
+          done
+
+          # 先追加到 defconfig 末尾
+          cat >> "$DEFCONFIG" <<'EOF'
           CONFIG_VIRTIO=y
           CONFIG_VIRTIO_PCI=y
           CONFIG_VIRTIO_MMIO=y
@@ -361,61 +377,49 @@ jobs:
           CONFIG_HW_RANDOM_VIRTIO=y
           EOF
 
-          echo "===== fragment written ====="
-          cat "$FRAG_FILE"
+          # 用内核自带脚本生成一个临时 .config，再 savedefconfig 重排
+          # 关键：用 Kleaf 环境里可用的 make（系统 make 即可，只要 ARCH 对）
+          rm -rf /tmp/kbuild_defconfig
+          mkdir -p /tmp/kbuild_defconfig
 
-          # 2) 在 define_common_kernels 的 "kernel_x86_64" dict 里加 defconfig_fragments
-          BUILD_FILE="BUILD.bazel"
-          [ -f "$BUILD_FILE" ] || { echo "BUILD.bazel not found"; exit 1; }
+          # 先复制原始 defconfig 作为 .config
+          cp "$DEFCONFIG" /tmp/kbuild_defconfig/.config
 
-          python3 - <<'PY'
-          import re, sys
+          # 用 make savedefconfig 重排
+          make -C . O=/tmp/kbuild_defconfig ARCH=x86_64 \
+               savedefconfig 2>&1 | tail -20 || {
+            echo "savedefconfig failed, falling back to keep manual edit"
+            # 失败就不重排，保留手动追加的内容
+            echo "===== after (manual, not normalized) ====="
+            grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG"
+            exit 0
+          }
 
-          path = "BUILD.bazel"
-          with open(path, "r", encoding="utf-8") as f:
-              src = f.read()
-
-          # 匹配 "kernel_x86_64": { ... }, 这个 dict
-          pattern = re.compile(
-              r'("kernel_x86_64"\s*:\s*\{)(.*?)(\n\s*\},)',
-              re.DOTALL,
-          )
-          m = pattern.search(src)
-          if not m:
-              print("ERROR: 'kernel_x86_64' dict not found", file=sys.stderr)
-              sys.exit(1)
-
-          body = m.group(2)
-
-          if "defconfig_fragments" in body:
-              print("defconfig_fragments already present in kernel_x86_64 dict, skipping")
-              sys.exit(0)
-
-          insert = '\n        "defconfig_fragments": ["arch/x86/configs/emulator_virtio.fragment"],'
-          new_body = body + insert
-          src = src[:m.start(2)] + new_body + src[m.end(2):]
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(src)
-
-          print("Inserted defconfig_fragments into kernel_x86_64 target_configs")
-          PY
-
-          echo "===== after: kernel_x86_64 target_configs ====="
-          python3 - <<'PY'
-          import re
-          with open("BUILD.bazel", "r", encoding="utf-8") as f:
-              src = f.read()
-          m = re.search(r'("kernel_x86_64"\s*:\s*\{)(.*?)(\n\s*\},)', src, re.DOTALL)
-          print(m.group(0))
-          PY
-
-          # 3) 校验
-          if ! grep -q 'emulator_virtio.fragment' "$BUILD_FILE"; then
-            echo "ERROR: defconfig_fragments not inserted"
-            exit 1
+          if [ -f /tmp/kbuild_defconfig/defconfig ]; then
+            cp /tmp/kbuild_defconfig/defconfig "$DEFCONFIG"
+            echo "===== after (normalized by savedefconfig) ====="
+            grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG"
+          else
+            echo "savedefconfig produced no output, keeping manual edit"
+            echo "===== after (manual) ====="
+            grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG"
           fi
-          echo "fragment registered successfully."
+
+          # 校验：这 8 项必须都是 =y
+          FAIL=0
+          for key in CONFIG_VIRTIO CONFIG_VIRTIO_PCI CONFIG_VIRTIO_MMIO \
+                     CONFIG_VIRTIO_BLK CONFIG_SCSI_VIRTIO CONFIG_VIRTIO_NET \
+                     CONFIG_VIRTIO_CONSOLE CONFIG_HW_RANDOM_VIRTIO; do
+            if grep -qxF "${key}=y" "$DEFCONFIG"; then
+              echo "OK: ${key}=y"
+            else
+              echo "ERROR: ${key}=y not found"
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" -eq 0 ] || exit 1
+
+          echo "virtio built-in patch applied and normalized."
 
       - name: Integrate KernelSU
         run: |
