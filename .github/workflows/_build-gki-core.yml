@@ -324,6 +324,79 @@ jobs:
             sed -i '/#include <trace\/hooks\/blk.h>/a #include <trace/hooks/fs.h>' ./fs/namespace.c
           fi
 
+      - name: Enable built-in virtio drivers for emulator
+        run: |
+          set -euo pipefail
+
+          cd kernel/common
+
+          echo "===== locating defconfig ====="
+
+          DEFCONFIG=""
+          for candidate in \
+            arch/x86/configs/gki_defconfig \
+            arch/x86/configs/x86_64_defconfig \
+            arch/x86/configs/ranchu_defconfig
+          do
+            if [ -f "$candidate" ]; then
+              DEFCONFIG="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$DEFCONFIG" ]; then
+            echo "ERROR: no defconfig found, listing candidates:"
+            find arch/x86/configs -maxdepth 1 -type f -name '*defconfig*' -print || true
+            exit 1
+          fi
+
+          echo "Using defconfig: $DEFCONFIG"
+
+          echo "===== before (relevant entries) ====="
+          grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG" || echo "(none present)"
+
+          # 需要的 built-in 项
+          REQUIRED_CONFIGS=(
+            "CONFIG_VIRTIO=y"
+            "CONFIG_VIRTIO_PCI=y"
+            "CONFIG_VIRTIO_MMIO=y"
+            "CONFIG_VIRTIO_BLK=y"
+            "CONFIG_SCSI_VIRTIO=y"
+            "CONFIG_VIRTIO_NET=y"
+            "CONFIG_VIRTIO_CONSOLE=y"
+            "CONFIG_HW_RANDOM_VIRTIO=y"
+          )
+
+          for entry in "${REQUIRED_CONFIGS[@]}"; do
+            key="${entry%%=*}"
+            # 先删掉已有的 CONFIG_VIRTIO_BLK=y / =m / # ... is not set
+            sed -i "/^${key}=/d" "$DEFCONFIG"
+            sed -i "/^# ${key} is not set/d" "$DEFCONFIG"
+            echo "$entry" >> "$DEFCONFIG"
+          done
+
+          echo "===== after (relevant entries) ====="
+          grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG"
+
+          echo "===== verify each key is =y ====="
+          FAIL=0
+          for entry in "${REQUIRED_CONFIGS[@]}"; do
+            key="${entry%%=*}"
+            if grep -qxF "$entry" "$DEFCONFIG"; then
+              echo "OK: $entry"
+            else
+              echo "ERROR: $entry not applied correctly"
+              FAIL=1
+            fi
+          done
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "Patch verification failed."
+            exit 1
+          fi
+
+          echo "virtio built-in patch applied successfully."
+
       - name: Integrate KernelSU
         run: |
           cd kernel
