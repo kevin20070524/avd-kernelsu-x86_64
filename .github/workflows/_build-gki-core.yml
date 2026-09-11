@@ -341,6 +341,82 @@ jobs:
           echo "===== grep define_common_kernels ====="
           grep -n 'define_common_kernels\|kernel_build(' BUILD.bazel | head -40
 
+      - name: Add virtio defconfig fragment (Kleaf-safe)
+        run: |
+          set -euo pipefail
+          cd kernel/common
+
+          # 1) 写 fragment 文件
+          FRAG_DIR="arch/x86/configs"
+          FRAG_FILE="${FRAG_DIR}/emulator_virtio.fragment"
+          mkdir -p "$FRAG_DIR"
+          cat > "$FRAG_FILE" <<'EOF'
+          CONFIG_VIRTIO=y
+          CONFIG_VIRTIO_PCI=y
+          CONFIG_VIRTIO_MMIO=y
+          CONFIG_VIRTIO_BLK=y
+          CONFIG_SCSI_VIRTIO=y
+          CONFIG_VIRTIO_NET=y
+          CONFIG_VIRTIO_CONSOLE=y
+          CONFIG_HW_RANDOM_VIRTIO=y
+          EOF
+
+          echo "===== fragment written ====="
+          cat "$FRAG_FILE"
+
+          # 2) 在 define_common_kernels 的 "kernel_x86_64" dict 里加 defconfig_fragments
+          BUILD_FILE="BUILD.bazel"
+          [ -f "$BUILD_FILE" ] || { echo "BUILD.bazel not found"; exit 1; }
+
+          python3 - <<'PY'
+          import re, sys
+
+          path = "BUILD.bazel"
+          with open(path, "r", encoding="utf-8") as f:
+              src = f.read()
+
+          # 匹配 "kernel_x86_64": { ... }, 这个 dict
+          pattern = re.compile(
+              r'("kernel_x86_64"\s*:\s*\{)(.*?)(\n\s*\},)',
+              re.DOTALL,
+          )
+          m = pattern.search(src)
+          if not m:
+              print("ERROR: 'kernel_x86_64' dict not found", file=sys.stderr)
+              sys.exit(1)
+
+          body = m.group(2)
+
+          if "defconfig_fragments" in body:
+              print("defconfig_fragments already present in kernel_x86_64 dict, skipping")
+              sys.exit(0)
+
+          insert = '\n        "defconfig_fragments": ["arch/x86/configs/emulator_virtio.fragment"],'
+          new_body = body + insert
+          src = src[:m.start(2)] + new_body + src[m.end(2):]
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(src)
+
+          print("Inserted defconfig_fragments into kernel_x86_64 target_configs")
+          PY
+
+          echo "===== after: kernel_x86_64 target_configs ====="
+          python3 - <<'PY'
+          import re
+          with open("BUILD.bazel", "r", encoding="utf-8") as f:
+              src = f.read()
+          m = re.search(r'("kernel_x86_64"\s*:\s*\{)(.*?)(\n\s*\},)', src, re.DOTALL)
+          print(m.group(0))
+          PY
+
+          # 3) 校验
+          if ! grep -q 'emulator_virtio.fragment' "$BUILD_FILE"; then
+            echo "ERROR: defconfig_fragments not inserted"
+            exit 1
+          fi
+          echo "fragment registered successfully."
+
       - name: Integrate KernelSU
         run: |
           cd kernel
