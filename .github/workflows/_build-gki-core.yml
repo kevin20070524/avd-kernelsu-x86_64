@@ -580,6 +580,35 @@ jobs:
           echo "KSU_X86_SYSCALL_HARDENING_PATCHED=$KSU_X86_SYSCALL_HARDENING_PATCHED" >> "$GITHUB_ENV"
           echo "KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF=$KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF" >> "$GITHUB_ENV"
 
+
+      - name: Patch Kleaf build_utils.sh (fix octal 09 bug)
+        run: |
+          FILE="kernel/build/kernel/build_utils.sh"
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: $FILE not found"
+            exit 1
+          fi
+
+          echo "===== before ====="
+          sed -n '874,886p' "$FILE"
+
+          # 去掉 date +%m 的前导零，避免 09 被当八进制
+          sed -i "s/date +'%m'/date +'%-m'/g" "$FILE"
+          # 保险起见，把 +%d +%H +%M +%S 也一并去零（若脚本里用到）
+          sed -i "s/date +'%d'/date +'%-d'/g" "$FILE"
+          sed -i "s/date +'%H'/date +'%-H'/g" "$FILE"
+          sed -i "s/date +'%M'/date +'%-M'/g" "$FILE"
+          sed -i "s/date +'%S'/date +'%-S'/g" "$FILE"
+
+          echo "===== after ====="
+          sed -n '874,886p' "$FILE"
+
+          # 校验
+          if grep -q "date +'%m'" "$FILE"; then
+            echo "ERROR: patch failed, date +'%m' still present"
+            exit 1
+          fi
+          echo "Patch applied successfully."
       - name: Build GKI Kernel
         run: |
           cd kernel
