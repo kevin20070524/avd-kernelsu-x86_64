@@ -367,7 +367,6 @@ jobs:
 
           # 先追加到 defconfig 末尾
           cat >> "$DEFCONFIG" <<'EOF'
-          CONFIG_VIRTIO=y
           CONFIG_VIRTIO_PCI=y
           CONFIG_VIRTIO_MMIO=y
           CONFIG_VIRTIO_BLK=y
@@ -405,9 +404,9 @@ jobs:
             grep -E '^CONFIG_(VIRTIO|SCSI_VIRTIO|HW_RANDOM_VIRTIO)' "$DEFCONFIG"
           fi
 
-          # 校验：这 8 项必须都是 =y
+          # 校验：这 7 项必须都是 =y
           FAIL=0
-          for key in CONFIG_VIRTIO CONFIG_VIRTIO_PCI CONFIG_VIRTIO_MMIO \
+          for key in CONFIG_VIRTIO_PCI CONFIG_VIRTIO_MMIO \
                      CONFIG_VIRTIO_BLK CONFIG_SCSI_VIRTIO CONFIG_VIRTIO_NET \
                      CONFIG_VIRTIO_CONSOLE CONFIG_HW_RANDOM_VIRTIO; do
             if grep -qxF "${key}=y" "$DEFCONFIG"; then
