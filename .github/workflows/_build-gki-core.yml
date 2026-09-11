@@ -583,7 +583,19 @@ jobs:
       - name: Build GKI Kernel
         run: |
           cd kernel
-
+          echo "========== DEBUG: build/kernel/build_utils.sh around line 876 =========="
+          if [ -f build/kernel/build_utils.sh ]; then
+            echo "--- sed -n '860,895p' ---"
+            sed -n '860,895p' build/kernel/build_utils.sh
+            echo "--- line 876 only ---"
+            sed -n '876p' build/kernel/build_utils.sh
+            echo "--- grep for \$(( usages near date/time ---"
+            grep -nE '\$\(\(|date \+%' build/kernel/build_utils.sh | head -50
+          else
+            echo "build/kernel/build_utils.sh not found"
+            find . -name build_utils.sh -maxdepth 5 2>/dev/null
+          fi
+          echo "========== END DEBUG =========="
           run_dist_target() {
             target="$1"
             dest="$2"
