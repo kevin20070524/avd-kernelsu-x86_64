@@ -324,88 +324,22 @@ jobs:
             sed -i '/#include <trace\/hooks\/blk.h>/a #include <trace/hooks/fs.h>' ./fs/namespace.c
           fi
 
-      - name: Add virtio defconfig fragment (Kleaf-safe)
-        run: |
-          set -euo pipefail
-          cd kernel/common
-
-          # 1) 写 fragment 文件
-          FRAG_DIR="arch/x86/configs"
-          FRAG_FILE="${FRAG_DIR}/emulator_virtio.fragment"
-          mkdir -p "$FRAG_DIR"
-          cat > "$FRAG_FILE" <<'EOF'
-          CONFIG_VIRTIO=y
-          CONFIG_VIRTIO_PCI=y
-          CONFIG_VIRTIO_MMIO=y
-          CONFIG_VIRTIO_BLK=y
-          CONFIG_SCSI_VIRTIO=y
-          CONFIG_VIRTIO_NET=y
-          CONFIG_VIRTIO_CONSOLE=y
-          CONFIG_HW_RANDOM_VIRTIO=y
-          EOF
-
-          echo "===== fragment written ====="
-          cat "$FRAG_FILE"
-
-          # 2) 在 BUILD.bazel 里给 kernel_x86_64 加 defconfig_fragments
-          BUILD_FILE="BUILD.bazel"
-          [ -f "$BUILD_FILE" ] || { echo "BUILD.bazel not found"; exit 1; }
-
-          # 打印原始相关行，方便排查
-          echo "===== before: kernel_x86_64 kernel_build ====="
-          grep -n "kernel_x86_64" "$BUILD_FILE" || true
-
-          # 用 python 精准插入 defconfig_fragments（避免 sed 误伤）
-          python3 - <<'PY'
-          import re, sys
-
-          path = "BUILD.bazel"
-          with open(path, "r", encoding="utf-8") as f:
-              src = f.read()
-
-          # 找到 kernel_x86_64 的 kernel_build 块
-          # 典型形式： name = "kernel_x86_64",
-          pattern = re.compile(
-              r'(kernel_build\s*\([^)]*?name\s*=\s*"kernel_x86_64"[^)]*?)\)',
-              re.DOTALL,
-          )
-          m = pattern.search(src)
-          if not m:
-              print("ERROR: kernel_x86_64 kernel_build block not found", file=sys.stderr)
-              sys.exit(1)
-
-          block = m.group(0)
-          if "defconfig_fragments" in block:
-              print("defconfig_fragments already present in kernel_x86_64, skipping")
-              sys.exit(0)
-
-          # 在 block 的最后一个 ")" 之前插入
-          insert = '    defconfig_fragments = ["arch/x86/configs/emulator_virtio.fragment"],\n'
-          new_block = block[:-1] + insert + ")"
-          src = src[:m.start()] + new_block + src[m.end():]
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(src)
-
-          print("Inserted defconfig_fragments into kernel_x86_64 kernel_build")
-          PY
-
-          echo "===== after: kernel_x86_64 kernel_build (excerpt) ====="
-          grep -n -A 20 'name = "kernel_x86_64"' "$BUILD_FILE" | head -40 || true
-
-          # 3) 校验
-          if ! grep -q 'emulator_virtio.fragment' "$BUILD_FILE"; then
-            echo "ERROR: defconfig_fragments not inserted"
-            exit 1
-          fi
-          echo "fragment registered successfully."
-
-
+     
       - name: Show BUILD.bazel kernel_x86_64 context
         run: |
           cd kernel/common
           grep -n -B2 -A 30 'name = "kernel_x86_64"' BUILD.bazel | head -60
-      
+
+       
+      - name: Show common/BUILD.bazel kernel_x86_64 structure
+        run: |
+          cd kernel/common
+          echo "===== line 100-200 ====="
+          sed -n '100,200p' BUILD.bazel
+          echo "===== line 780-830 ====="
+          sed -n '780,830p' BUILD.bazel
+          echo "===== grep define_common_kernels ====="
+          grep -n 'define_common_kernels\|kernel_build(' BUILD.bazel | head -40
 
       - name: Integrate KernelSU
         run: |
